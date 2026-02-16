@@ -1,0 +1,123 @@
+<script>
+  const el = (id) => document.getElementById(id);
+
+  // Fallback-Startwerte, falls noch nichts gespeichert + kein Internet
+  const defaultRates = { JPY: 180, KRW: 1700 };
+
+  const loadRate = (ccy) => {
+    const v = localStorage.getItem("rate_" + ccy);
+    return v ? Number(v) : defaultRates[ccy];
+  };
+
+  const saveRate = (ccy, rate) => {
+    localStorage.setItem("rate_" + ccy, String(rate));
+    localStorage.setItem("rate_ts_" + ccy, String(Date.now()));
+  };
+
+  const fmt = new Intl.NumberFormat("de-DE");
+
+  function setStatus(text) {
+    const hint = el("hint");
+    if (hint) hint.textContent = text;
+  }
+
+  const recalc = () => {
+    const amt = Number(el("amount").value || 0);
+    const ccy = el("quote").value;
+    const rate = Number(el("rate").value || 0);
+    let out = amt * rate;
+
+    const r = el("round").value;
+    if (r !== "none") {
+      const step = Number(r);
+      out = Math.round(out / step) * step;
+    }
+
+    el("out").textContent = rate ? `${fmt.format(out)} ${ccy}` : "—";
+  };
+
+  // Holt aktuelle Kurse (EUR->JPY/KRW) von Frankfurter (ECB-basiert)
+  async function refreshRates() {
+    // Wenn offline: nicht versuchen, sondern gespeicherten Kurs nehmen
+    if (!navigator.onLine) {
+      const ccy = el("quote").value;
+      el("rate").value = loadRate(ccy);
+      const ts = localStorage.getItem("rate_ts_" + ccy);
+      setStatus(ts
+        ? `Offline: letzter gespeicherter Kurs wird genutzt (gespeichert: ${new Date(Number(ts)).toLocaleString("de-DE")}).`
+        : "Offline: kein gespeicherter Kurs gefunden – bitte Kurs einmal manuell speichern.");
+      recalc();
+      return;
+    }
+
+    try {
+      setStatus("Aktualisiere Kurse…");
+      const res = await fetch("https://api.frankfurter.dev/latest?from=EUR&to=JPY,KRW");
+      const data = await res.json();
+
+      if (data && data.rates) {
+        if (data.rates.JPY) saveRate("JPY", data.rates.JPY);
+        if (data.rates.KRW) saveRate("KRW", data.rates.KRW);
+
+        const ccy = el("quote").value;
+        el("rate").value = loadRate(ccy);
+
+        const dateStr = data.date ? data.date : "heute";
+        setStatus(`Aktueller ECB-Referenzkurs geladen (${dateStr}). Offline-Fallback ist gespeichert.`);
+        recalc();
+      } else {
+        throw new Error("Keine rates im Response");
+      }
+    } catch (e) {
+      // Wenn API mal nicht geht: gespeicherten Kurs verwenden
+      const ccy = el("quote").value;
+      el("rate").value = loadRate(ccy);
+      setStatus("Kurs-Update nicht möglich – verwende den zuletzt gespeicherten Kurs (oder Fallback).");
+      recalc();
+    }
+  }
+
+  const init = () => {
+    const ccy = el("quote").value;
+    el("rate").value = loadRate(ccy);
+    recalc();
+    refreshRates(); // versucht beim Start automatisch zu aktualisieren
+  };
+
+  el("quote").addEventListener("change", () => {
+    const ccy = el("quote").value;
+    el("rate").value = loadRate(ccy);
+    recalc();
+    refreshRates();
+  });
+
+  el("amount").addEventListener("input", recalc);
+  el("rate").addEventListener("input", recalc);
+  el("round").addEventListener("change", recalc);
+
+  el("save").addEventListener("click", () => {
+    const ccy = el("quote").value;
+    const rate = Number(el("rate").value || 0);
+    if (rate > 0) saveRate(ccy, rate);
+    recalc();
+    alert("Kurs gespeichert (offline verfügbar).");
+  });
+
+  el("swap").addEventListener("click", () => {
+    el("quote").value = el("quote").value === "JPY" ? "KRW" : "JPY";
+    const ccy = el("quote").value;
+    el("rate").value = loadRate(ccy);
+    recalc();
+    refreshRates();
+  });
+
+  // Service Worker registrieren (Offline-Funktion)
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("./sw.js");
+  }
+
+  // Bei Netzwechsel neu ziehen
+  window.addEventListener("online", refreshRates);
+
+  init();
+</script>
