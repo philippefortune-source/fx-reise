@@ -1,7 +1,106 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>FX Reise-Converter</title>
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#111827"/>
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;margin:0;background:#0b1220;color:#e5e7eb}
+    .wrap{max-width:720px;margin:0 auto;padding:16px}
+    .card{background:#111827;border:1px solid #1f2937;border-radius:14px;padding:14px;margin:12px 0}
+    h1{font-size:18px;margin:6px 0 10px}
+    label{display:block;font-size:12px;color:#9ca3af;margin:10px 0 6px}
+    input,select,button{width:100%;padding:12px;border-radius:12px;border:1px solid #374151;background:#0b1220;color:#e5e7eb;font-size:16px}
+    .row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+    .row3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
+    .kpi{font-size:28px;font-weight:800;margin-top:10px}
+    .muted{color:#9ca3af;font-size:12px;line-height:1.4}
+    .btn{background:#2563eb;border:none;font-weight:700;cursor:pointer}
+    .btn.secondary{background:#374151}
+    .btn.ghost{background:transparent;border:1px solid #374151}
+    .pillrow{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+    .pill{width:auto;padding:10px 12px;border-radius:999px;border:1px solid #374151;background:#0b1220;color:#e5e7eb;font-weight:700}
+    .pill.primary{background:#1d4ed8;border-color:#1d4ed8}
+    .pill.on{background:#059669;border-color:#059669}
+    .mini{font-size:11px;color:#9ca3af;margin-top:6px}
+    .divider{height:1px;background:#1f2937;margin:12px 0}
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <h1>FX Reise-Converter (Quick + Family + Auto-Kurs)</h1>
+
+  <div class="card">
+    <div class="row">
+      <div>
+        <label>Richtung</label>
+        <select id="dir">
+          <option value="EUR_TO_LOCAL">EUR → JPY/KRW</option>
+          <option value="LOCAL_TO_EUR" selected>JPY/KRW → EUR</option>
+        </select>
+      </div>
+      <div>
+        <label>Zielwährung</label>
+        <select id="quote">
+          <option value="JPY">JPY (Japan)</option>
+          <option value="KRW">KRW (Korea)</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="row3">
+      <div>
+        <label>Family-Modus</label>
+        <button class="btn secondary" id="family">pro Person (×1)</button>
+        <div class="mini">Tippen zum Umschalten auf ×4</div>
+      </div>
+      <div>
+        <label>Runden</label>
+        <select id="round">
+          <option value="none">nicht runden</option>
+          <option value="0">auf ganze</option>
+          <option value="10">auf 10er</option>
+          <option value="100">auf 100er</option>
+        </select>
+      </div>
+      <div>
+        <label>Kurs</label>
+        <input id="rate" type="number" inputmode="decimal" step="0.0001" />
+        <div class="mini">1 EUR = ? (JPY/KRW)</div>
+      </div>
+    </div>
+
+    <div class="divider"></div>
+
+    <label>Betrag (Quick-Modus unten)</label>
+    <input id="amount" type="number" inputmode="decimal" placeholder="z. B. 10000" />
+
+    <div class="pillrow" id="quick"></div>
+    <div class="mini">Quick-Buttons passen sich an Richtung & Währung an.</div>
+
+    <div class="kpi" id="out">—</div>
+    <div class="muted" id="hint">Lade Kurs…</div>
+
+    <div class="row" style="margin-top:12px">
+      <button class="btn" id="refresh">Kurs aktualisieren</button>
+      <button class="btn ghost" id="save">Kurs manuell speichern</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="muted">
+      <b>iPhone Install:</b> Link öffnen → <b>Teilen</b> → <b>„Zum Home-Bildschirm“</b>.
+      <br/>Offline: App nutzt den zuletzt gespeicherten Kurs.
+    </div>
+  </div>
+</div>
+
 <script>
   const el = (id) => document.getElementById(id);
 
-  // Fallback-Startwerte, falls noch nichts gespeichert + kein Internet
+  // Startwerte (werden durch gespeicherte/online Kurse ersetzt)
   const defaultRates = { JPY: 180, KRW: 1700 };
 
   const loadRate = (ccy) => {
@@ -14,38 +113,95 @@
     localStorage.setItem("rate_ts_" + ccy, String(Date.now()));
   };
 
-  const fmt = new Intl.NumberFormat("de-DE");
+  const fmtEUR = new Intl.NumberFormat("de-DE", { style: "currency", currency: "EUR" });
+  const fmtInt = new Intl.NumberFormat("de-DE");
 
-  function setStatus(text) {
-    const hint = el("hint");
-    if (hint) hint.textContent = text;
+  let familyMult = Number(localStorage.getItem("familyMult") || "1"); // 1 oder 4
+
+  function setStatus(text) { el("hint").textContent = text; }
+
+  function applyFamilyButton() {
+    el("family").textContent = familyMult === 4 ? "Familie (×4)" : "pro Person (×1)";
+    el("family").classList.toggle("on", familyMult === 4);
   }
 
-  const recalc = () => {
-    const amt = Number(el("amount").value || 0);
+  function getRounded(value) {
+    const r = el("round").value;
+    if (r === "none") return value;
+    const step = Number(r);
+    return Math.round(value / step) * step;
+  }
+
+  function recalc() {
+    const dir = el("dir").value;
     const ccy = el("quote").value;
     const rate = Number(el("rate").value || 0);
-    let out = amt * rate;
+    const amtRaw = Number(el("amount").value || 0);
+    const amt = amtRaw * familyMult;
 
-    const r = el("round").value;
-    if (r !== "none") {
-      const step = Number(r);
-      out = Math.round(out / step) * step;
+    if (!rate || rate <= 0) { el("out").textContent = "—"; return; }
+
+    if (dir === "EUR_TO_LOCAL") {
+      const out = getRounded(amt * rate);
+      el("out").textContent = `${fmtInt.format(out)} ${ccy}`;
+    } else {
+      const eur = amt / rate;
+      const eurRounded = getRounded(eur);
+      el("out").textContent = fmtEUR.format(eurRounded);
+    }
+  }
+
+  // Quick Buttons je nach Modus
+  function renderQuick() {
+    const dir = el("dir").value;
+    const ccy = el("quote").value;
+
+    let values = [];
+    if (dir === "EUR_TO_LOCAL") {
+      values = [5, 10, 20, 50, 100]; // EUR
+    } else {
+      values = (ccy === "JPY")
+        ? [500, 1000, 2000, 5000, 10000]
+        : [1000, 5000, 10000, 50000, 100000];
     }
 
-    el("out").textContent = rate ? `${fmt.format(out)} ${ccy}` : "—";
-  };
+    const container = el("quick");
+    container.innerHTML = "";
 
-  // Holt aktuelle Kurse (EUR->JPY/KRW) von Frankfurter (ECB-basiert)
+    values.forEach(v => {
+      const b = document.createElement("button");
+      b.className = "pill";
+      b.type = "button";
+      b.textContent = (dir === "EUR_TO_LOCAL") ? `€${v}` : `${ccy === "JPY" ? "¥" : "₩"}${fmtInt.format(v)}`;
+      b.addEventListener("click", () => {
+        el("amount").value = v;
+        recalc();
+      });
+      container.appendChild(b);
+    });
+
+    // „Clear“
+    const clear = document.createElement("button");
+    clear.className = "pill primary";
+    clear.type = "button";
+    clear.textContent = "Reset";
+    clear.addEventListener("click", () => {
+      el("amount").value = "";
+      recalc();
+    });
+    container.appendChild(clear);
+  }
+
+  // Auto-Update (ECB-basiert via Frankfurter API)
   async function refreshRates() {
-    // Wenn offline: nicht versuchen, sondern gespeicherten Kurs nehmen
+    const ccy = el("quote").value;
+
     if (!navigator.onLine) {
-      const ccy = el("quote").value;
       el("rate").value = loadRate(ccy);
       const ts = localStorage.getItem("rate_ts_" + ccy);
       setStatus(ts
-        ? `Offline: letzter gespeicherter Kurs wird genutzt (gespeichert: ${new Date(Number(ts)).toLocaleString("de-DE")}).`
-        : "Offline: kein gespeicherter Kurs gefunden – bitte Kurs einmal manuell speichern.");
+        ? `Offline: letzter Kurs genutzt (gespeichert: ${new Date(Number(ts)).toLocaleString("de-DE")}).`
+        : "Offline: kein gespeicherter Kurs – bitte einmal online aktualisieren oder manuell speichern.");
       recalc();
       return;
     }
@@ -59,65 +215,69 @@
         if (data.rates.JPY) saveRate("JPY", data.rates.JPY);
         if (data.rates.KRW) saveRate("KRW", data.rates.KRW);
 
-        const ccy = el("quote").value;
         el("rate").value = loadRate(ccy);
-
         const dateStr = data.date ? data.date : "heute";
-        setStatus(`Aktueller ECB-Referenzkurs geladen (${dateStr}). Offline-Fallback ist gespeichert.`);
+        setStatus(`Aktueller Referenzkurs geladen (${dateStr}). Offline-Fallback gespeichert.`);
         recalc();
       } else {
-        throw new Error("Keine rates im Response");
+        throw new Error("Keine rates");
       }
     } catch (e) {
-      // Wenn API mal nicht geht: gespeicherten Kurs verwenden
-      const ccy = el("quote").value;
       el("rate").value = loadRate(ccy);
-      setStatus("Kurs-Update nicht möglich – verwende den zuletzt gespeicherten Kurs (oder Fallback).");
+      setStatus("Update nicht möglich – nutze letzten gespeicherten Kurs (oder Fallback).");
       recalc();
     }
   }
 
-  const init = () => {
-    const ccy = el("quote").value;
-    el("rate").value = loadRate(ccy);
-    recalc();
-    refreshRates(); // versucht beim Start automatisch zu aktualisieren
-  };
-
-  el("quote").addEventListener("change", () => {
-    const ccy = el("quote").value;
-    el("rate").value = loadRate(ccy);
+  function init() {
+    applyFamilyButton();
+    el("rate").value = loadRate(el("quote").value);
+    renderQuick();
     recalc();
     refreshRates();
+  }
+
+  // Events
+  el("quote").addEventListener("change", () => {
+    el("rate").value = loadRate(el("quote").value);
+    renderQuick();
+    recalc();
+    refreshRates();
+  });
+
+  el("dir").addEventListener("change", () => {
+    renderQuick();
+    recalc();
   });
 
   el("amount").addEventListener("input", recalc);
   el("rate").addEventListener("input", recalc);
   el("round").addEventListener("change", recalc);
 
+  el("family").addEventListener("click", () => {
+    familyMult = (familyMult === 4) ? 1 : 4;
+    localStorage.setItem("familyMult", String(familyMult));
+    applyFamilyButton();
+    recalc();
+  });
+
+  el("refresh").addEventListener("click", refreshRates);
+
   el("save").addEventListener("click", () => {
     const ccy = el("quote").value;
     const rate = Number(el("rate").value || 0);
     if (rate > 0) saveRate(ccy, rate);
-    recalc();
     alert("Kurs gespeichert (offline verfügbar).");
-  });
-
-  el("swap").addEventListener("click", () => {
-    el("quote").value = el("quote").value === "JPY" ? "KRW" : "JPY";
-    const ccy = el("quote").value;
-    el("rate").value = loadRate(ccy);
     recalc();
-    refreshRates();
   });
 
-  // Service Worker registrieren (Offline-Funktion)
+  // Offline-Funktion
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("./sw.js");
   }
-
-  // Bei Netzwechsel neu ziehen
   window.addEventListener("online", refreshRates);
 
   init();
 </script>
+</body>
+</html>
